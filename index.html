@@ -84,7 +84,12 @@ button:disabled{ opacity:0.5; }
 const API_URL = "https://script.google.com/macros/s/AKfycbyem5fAs2XGxNy6wrHO3s68CmJyHy7GI31IBKdiz49KtN3sfikYdfmpP07-3dWqna2R/exec";
 
 // 🚁 DRONE API (Node.js 서버)
-const DRONE_API = "http://localhost:3000/drones";
+const ws = new WebSocket("ws://localhost:3000");
+
+ws.onmessage = (event) => {
+    const drones = JSON.parse(event.data);
+    renderDrones(drones);
+};
 
 // ================= MAP =================
 const map = L.map('map').setView([35.1239, 126.9883], 13);
