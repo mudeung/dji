@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🛰 SAR + DRONE CONTROL MAP</title>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+<style>
+body{
+    margin:0;
+    background:#050b18;
+    color:#00ff9d;
+    font-family:monospace;
+    overflow:hidden;
+}
+
+header{
+    background:#071a2f;
+    padding:10px;
+    text-align:center;
+    font-weight:bold;
+}
+
+#container{
+    display:flex;
+    height:calc(100vh - 50px);
+}
+
+#panel{
+    width:300px;
+    background:#07101f;
+    padding:10px;
+    display:flex;
+    flex-direction:column;
+    gap:6px;
+    overflow-y:auto;
+}
+
+#map{ flex:1; }
+
+input,button{
+    padding:10px;
+    border:1px solid #00ff9d;
+    background:#001a14;
+    color:#00ff9d;
+}
+
+button:disabled{ opacity:0.5; }
+
+@media (max-width: 768px){
+    #container{ flex-direction:column; }
+    #panel{ width:100%; max-height:35vh; }
+    #map{ height:65vh; }
+}
+</style>
+</head>
+
+<body>
+
+<header>🛰 SAR + DRONE CONTROL MAP</header>
+
+<div id="container">
+
+<div id="panel">
+<input id="name" placeholder="UNIT ID">
+<button id="startBtn" onclick="start()" disabled>START</button>
+
+<button onclick="goMyLocation()">📍 MY LOCATION</button>
+<button onclick="stopTracking()">⛔ STOP</button>
+<button onclick="sendSOS()">🚨 SOS</button>
+<button onclick="loadAllHistory()">📦 HISTORY</button>
+</div>
+
+<div id="map"></div>
+
+</div>
+
+<script>
+
+// ================= API =================
+const API_URL = "https://script.google.com/macros/s/AKfycbyem5fAs2XGxNy6wrHO3s68CmJyHy7GI31IBKdiz49KtN3sfikYdfmpP07-3dWqna2R/exec";
+
+// 🚁 DRONE API (Node.js 서버)
+const DRONE_API = "http://localhost:3000/drones";
+
+// ================= MAP =================
+const map = L.map('map').setView([35.1239, 126.9883], 13);
+
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+    attribution:'&copy; OpenStreetMap'
+}).addTo(map);
+
+// ================= STATE =================
+let myName="";
+let lastPos=null;
+let watchId=null;
+let intervalSend=null;
+let intervalLive=null;
+let intervalDrone=null;
+
+const markers={};
+
+// history
+const historyMarkers = L.layerGroup().addTo(map);
+const historyLines = L.layerGroup().addTo(map);
+
+// drones
+const droneLayer = L.layerGroup().addTo(map);
+let droneMarkers = {};
+
+// ================= INPUT =================
+const nameInput=document.getElementById("name");
+const startBtn=document.getElementById("startBtn");
+
+nameInput.addEventListener("input",()=>{
+    startBtn.disabled = nameInput.value.trim().length===0;
+});
+
+// ================= START =================
+function start(){
+
+    myName = nameInput.value.trim();
+    if(!myName) return alert("UNIT ID required");
+
+    nameInput.disabled=true;
+    startBtn.disabled=true;
+
+    watchId = navigator.geolocation.watchPosition(pos=>{
+
+        lastPos={
+            name:myName,
+            lat:pos.coords.latitude,
+            lng:pos.coords.longitude,
+            status:"normal"
+        };
+
+    },{
+        enableHighAccuracy:true,
+        maximumAge:1000
+    });
+
+    intervalSend=setInterval(sendData,5000);
+    intervalLive=setInterval(loadLive,3000);
+    intervalDrone=setInterval(loadDrones,3000);
+}
+
+// ================= SEND =================
+function sendData(){
+    if(!lastPos) return;
+
+    fetch(API_URL,{
+        method:"POST",
+        headers:{ "Content-Type":"text/plain" },
+        body:JSON.stringify(lastPos)
+    });
+}
+
+// ================= LIVE =================
+function loadLive(){
+    fetch(API_URL + "?t=" + Date.now())
+    .then(r=>r.json())
+    .then(renderLive);
+}
+
+function renderLive(data){
+
+    for(const p of data){
+
+        const key=p.name;
+        const pos=[p.lat,p.lng];
+
+        if(!markers[key]){
+            markers[key]=L.marker(pos).addTo(map);
+        }else{
+            markers[key].setLatLng(pos);
+        }
+
+        if(p.status==="SOS"){
+            markers[key].setIcon(
+                L.icon({
+                    iconUrl:"https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png",
+                    iconSize:[25,41],
+                    iconAnchor:[12,41]
+                })
+            );
+        }
+    }
+}
+
+// ================= 🚁 DRONES =================
+function loadDrones(){
+
+    fetch(DRONE_API)
+    .then(res=>res.json())
+    .then(renderDrones)
+    .catch(err=>console.log(err));
+}
+
+function renderDrones(data){
+
+    droneLayer.clearLayers();
+    droneMarkers = {};
+
+    data.forEach(d=>{
+
+        if(!d.lat || !d.lng) return;
+
+        const marker = L.marker([d.lat,d.lng],{
+            icon: L.icon({
+                iconUrl:"https://cdn-icons-png.flaticon.com/512/2972/2972185.png",
+                iconSize:[30,30]
+            })
+        }).addTo(droneLayer);
+
+        marker.bindPopup("🚁 DRONE: " + d.id);
+
+        droneMarkers[d.id]=marker;
+    });
+}
+
+// ================= SOS =================
+function sendSOS(){
+
+    if(!lastPos) return;
+
+    lastPos.status="SOS";
+
+    fetch(API_URL,{
+        method:"POST",
+        headers:{ "Content-Type":"text/plain" },
+        body:JSON.stringify(lastPos)
+    });
+
+    alert("🚨 SOS SENT");
+}
+
+// ================= LOCATION =================
+function goMyLocation(){
+    if(!lastPos) return;
+    map.setView([lastPos.lat,lastPos.lng],16);
+}
+
+// ================= STOP =================
+function stopTracking(){
+    if(watchId) navigator.geolocation.clearWatch(watchId);
+    clearInterval(intervalSend);
+    clearInterval(intervalLive);
+    clearInterval(intervalDrone);
+}
+
+// ================= HISTORY =================
+function loadAllHistory(){
+
+    fetch(API_URL + "?history=all&t=" + Date.now())
+    .then(r=>r.json())
+    .then(showHistoryMap);
+}
+
+function showHistoryMap(data){
+
+    historyMarkers.clearLayers();
+    historyLines.clearLayers();
+
+    const grouped={};
+
+    data.forEach(d=>{
+        if(!grouped[d.name]) grouped[d.name]=[];
+        grouped[d.name].push([d.lat,d.lng]);
+    });
+
+    for(const name in grouped){
+
+        const path=grouped[name];
+
+        L.marker(path[0])
+        .bindPopup("🚩 START: "+name)
+        .addTo(historyMarkers);
+
+        L.marker(path[path.length-1])
+        .bindPopup("🏁 END: "+name)
+        .addTo(historyMarkers);
+
+        L.polyline(path,{
+            color:"#ffcc00",
+            weight:3
+        }).addTo(historyLines);
+    }
+}
+
+</script>
+</body>
+</html>
