@@ -1,14 +1,16 @@
 <!DOCTYPE html>
-<html>
+<html lang="ko">
 <head>
+
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>🛰 SAR + DRONE CONTROL MAP</title>
 
-<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css">
-<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<title>🛰 SEARCH AND RESCUE AI MAP</title>
+
+<script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=YOUR_KAKAO_APPKEY&libraries=services"></script>
 
 <style>
+
 body{
     margin:0;
     background:#050b18;
@@ -21,6 +23,7 @@ header{
     background:#071a2f;
     padding:10px;
     text-align:center;
+    font-size:20px;
     font-weight:bold;
 }
 
@@ -35,266 +38,866 @@ header{
     padding:10px;
     display:flex;
     flex-direction:column;
-    gap:6px;
-    overflow-y:auto;
+    gap:8px;
+    border-right:1px solid #0f3;
 }
 
-#map{ flex:1; }
+#map{
+    flex:1;
+}
 
 input,button{
+
     padding:10px;
-    border:1px solid #00ff9d;
     background:#001a14;
     color:#00ff9d;
+    border:1px solid #00ff9d;
+    border-radius:4px;
+    font-size:14px;
 }
 
-button:disabled{ opacity:0.5; }
+button:hover{
 
-@media (max-width: 768px){
-    #container{ flex-direction:column; }
-    #panel{ width:100%; max-height:35vh; }
-    #map{ height:65vh; }
+    background:#003328;
+    cursor:pointer;
+
 }
+
+button:disabled{
+
+    opacity:0.5;
+
+}
+
+.status{
+
+    margin-top:10px;
+    font-size:13px;
+    color:#ffffff;
+
+}
+
 </style>
+
 </head>
 
 <body>
 
-<header>🛰 SAR + DRONE CONTROL MAP</header>
+<header>
+
+🛰 SEARCH AND RESCUE AI MAP
+
+</header>
 
 <div id="container">
 
-<div id="panel">
-<input id="name" placeholder="UNIT ID">
-<button id="startBtn" onclick="start()" disabled>START</button>
+    <div id="panel">
 
-<button onclick="goMyLocation()">📍 MY LOCATION</button>
-<button onclick="stopTracking()">⛔ STOP</button>
-<button onclick="sendSOS()">🚨 SOS</button>
-<button onclick="loadAllHistory()">📦 HISTORY</button>
-</div>
+        <input
+            id="name"
+            placeholder="RESCUE ID">
 
-<div id="map"></div>
+        <button
+            id="startBtn"
+            onclick="start()"
+            disabled>
+
+            START
+
+        </button>
+
+        <button onclick="goMyLocation()">
+            📍 MY LOCATION
+        </button>
+
+        <button onclick="shareLocation()">
+            📡 위치 공유
+        </button>
+
+        <button onclick="stopTracking()">
+            ⛔ STOP
+        </button>
+
+        <button onclick="loadAllHistory()">
+            📦 전체 기록
+        </button>
+
+        <!-- 이후 드론 상태 표시 -->
+        <div id="droneStatus" class="status">
+
+            🚁 DRONE : OFFLINE
+
+        </div>
+
+    </div>
+
+    <div id="map"></div>
 
 </div>
 
 <script>
 
-// ================= API =================
-const API_URL = "https://script.google.com/macros/s/AKfycbyem5fAs2XGxNy6wrHO3s68CmJyHy7GI31IBKdiz49KtN3sfikYdfmpP07-3dWqna2R/exec";
+// ======================================================
+// API
+// ======================================================
 
-// 🚁 DRONE API (Node.js 서버)
-const ws = new WebSocket("ws://localhost:3000");
+const API_URL =
+"https://script.google.com/macros/s/AKfycbyem5fAs2XGxNy6wrHO3s68CmJyHy7GI31IBKdiz49KtN3sfikYdfmpP07-3dWqna2R/exec";
 
-ws.onmessage = (event) => {
-    const drones = JSON.parse(event.data);
-    renderDrones(drones);
-};
 
-// ================= MAP =================
-const map = L.map('map').setView([35.1239, 126.9883], 13);
+// ======================================================
+// DEVICE ID
+// ======================================================
 
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
-    attribution:'&copy; OpenStreetMap'
-}).addTo(map);
+const DEVICE_ID =
+localStorage.getItem("device_id") || crypto.randomUUID();
 
-// ================= STATE =================
-let myName="";
-let lastPos=null;
-let watchId=null;
-let intervalSend=null;
-let intervalLive=null;
-let intervalDrone=null;
+localStorage.setItem("device_id", DEVICE_ID);
 
-const markers={};
 
-// history
-const historyMarkers = L.layerGroup().addTo(map);
-const historyLines = L.layerGroup().addTo(map);
+// ======================================================
+// DEVICE TYPE
+// ======================================================
 
-// drones
-const droneLayer = L.layerGroup().addTo(map);
-let droneMarkers = {};
+const isMobile =
+/Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
-// ================= INPUT =================
-const nameInput=document.getElementById("name");
-const startBtn=document.getElementById("startBtn");
+
+// ======================================================
+// MAP
+// ======================================================
+
+const map = new kakao.maps.Map(
+
+    document.getElementById("map"),
+
+    {
+
+        center:new kakao.maps.LatLng(
+            35.1239,
+            126.9883
+        ),
+
+        level:5
+
+    }
+
+);
+
+
+// ======================================================
+// MARKERS
+// ======================================================
+
+// 구조대원 마커
+const markers = {};
+
+// 드론 마커
+const droneMarkers = {};
+
+
+// ======================================================
+// POLYLINE
+// ======================================================
+
+const polylines = {};
+
+
+// ======================================================
+// STATE
+// ======================================================
+
+let myName = "";
+
+let lastPos = null;
+
+let watchId = null;
+
+let intervalSend = null;
+
+let intervalLoad = null;
+
+
+// ======================================================
+// UI
+// ======================================================
+
+const nameInput =
+document.getElementById("name");
+
+const startBtn =
+document.getElementById("startBtn");
+
+const droneStatus =
+document.getElementById("droneStatus");
+
+
+// ======================================================
+// START BUTTON ENABLE
+// ======================================================
 
 nameInput.addEventListener("input",()=>{
-    startBtn.disabled = nameInput.value.trim().length===0;
+
+    startBtn.disabled =
+        nameInput.value.trim().length===0;
+
 });
 
-// ================= START =================
+
+// ======================================================
+// ENTER KEY
+// ======================================================
+
+nameInput.addEventListener("keydown",(e)=>{
+
+    if(e.key==="Enter"){
+
+        e.preventDefault();
+
+        if(!startBtn.disabled){
+
+            start();
+
+        }
+
+    }
+
+});
+
+
+// ======================================================
+// DRONE ICON
+// ======================================================
+
+const droneImage =
+new kakao.maps.MarkerImage(
+
+    "drone.png",
+
+    new kakao.maps.Size(40,40)
+
+);
+
+
+// ======================================================
+// STATUS
+// ======================================================
+
+function setDroneStatus(text,color){
+
+    droneStatus.innerHTML =
+        "🚁 DRONE : " + text;
+
+    droneStatus.style.color =
+        color;
+
+}
+
+setDroneStatus("OFFLINE","#ff5555");
+
+
+// ======================================================
+// AUTO CENTER (모바일)
+// ======================================================
+
+if(isMobile){
+
+    setInterval(()=>{
+
+        if(lastPos){
+
+            map.setCenter(
+
+                new kakao.maps.LatLng(
+                    lastPos.lat,
+                    lastPos.lng
+                )
+
+            );
+
+        }
+
+    },5000);
+
+}
+  
+// ======================================================
+// START
+// ======================================================
+
 function start(){
 
     myName = nameInput.value.trim();
-    if(!myName) return alert("UNIT ID required");
 
-    nameInput.disabled=true;
-    startBtn.disabled=true;
+    if(!myName){
 
-    watchId = navigator.geolocation.watchPosition(pos=>{
+        alert("RESCUE ID를 입력하세요.");
+        return;
 
-        lastPos={
-            name:myName,
-            lat:pos.coords.latitude,
-            lng:pos.coords.longitude,
-            status:"normal"
-        };
+    }
 
-    },{
-        enableHighAccuracy:true,
-        maximumAge:1000
-    });
+    nameInput.disabled = true;
+    startBtn.disabled = true;
 
-    intervalSend=setInterval(sendData,5000);
-    intervalLive=setInterval(loadLive,3000);
-    intervalDrone=setInterval(loadDrones,3000);
+    watchId = navigator.geolocation.watchPosition(
+
+        function(pos){
+
+            lastPos = {
+
+                name: myName,
+                device: DEVICE_ID,
+                lat: pos.coords.latitude,
+                lng: pos.coords.longitude,
+                status: "NORMAL"
+
+            };
+
+        },
+
+        function(err){
+
+            console.log(err);
+            alert("GPS 오류");
+
+        },
+
+        {
+
+            enableHighAccuracy:true,
+            maximumAge:1000,
+            timeout:10000
+
+        }
+
+    );
+
+    intervalSend = setInterval(sendData,5000);
+
+    intervalLoad = setInterval(loadLive,3000);
+
 }
 
-// ================= SEND =================
+
+// ======================================================
+// SEND DATA
+// ======================================================
+
 function sendData(){
+
     if(!lastPos) return;
 
     fetch(API_URL,{
+
         method:"POST",
-        headers:{ "Content-Type":"text/plain" },
+
+        headers:{
+            "Content-Type":"text/plain"
+        },
+
         body:JSON.stringify(lastPos)
-    });
+
+    })
+    .catch(console.error);
+
 }
 
-// ================= LIVE =================
+
+// ======================================================
+// LOAD LIVE
+// ======================================================
+
 function loadLive(){
+
     fetch(API_URL + "?t=" + Date.now())
-    .then(r=>r.json())
-    .then(renderLive);
+
+    .then(res=>res.json())
+
+    .then(renderLive)
+
+    .catch(console.error);
+
 }
+
+
+// ======================================================
+// GO MY LOCATION
+// ======================================================
+
+function goMyLocation(){
+
+    if(!lastPos) return;
+
+    map.setCenter(
+
+        new kakao.maps.LatLng(
+            lastPos.lat,
+            lastPos.lng
+        )
+
+    );
+
+}
+
+// ======================================================
+// RENDER LIVE (RESCUE + DJI DRONE)
+// ======================================================
 
 function renderLive(data){
 
-    for(const p of data){
+    const latest = {};
 
-        const key=p.name;
-        const pos=[p.lat,p.lng];
-
-        if(!markers[key]){
-            markers[key]=L.marker(pos).addTo(map);
-        }else{
-            markers[key].setLatLng(pos);
-        }
-
-        if(p.status==="SOS"){
-            markers[key].setIcon(
-                L.icon({
-                    iconUrl:"https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png",
-                    iconSize:[25,41],
-                    iconAnchor:[12,41]
-                })
-            );
-        }
-    }
-}
-
-// ================= 🚁 DRONES =================
-function loadDrones(){
-
-    fetch(DRONE_API)
-    .then(res=>res.json())
-    .then(renderDrones)
-    .catch(err=>console.log(err));
-}
-
-function renderDrones(data){
-
-    droneLayer.clearLayers();
-    droneMarkers = {};
-
-    data.forEach(d=>{
-
-        if(!d.lat || !d.lng) return;
-
-        const marker = L.marker([d.lat,d.lng],{
-            icon: L.icon({
-                iconUrl:"https://cdn-icons-png.flaticon.com/512/2972/2972185.png",
-                iconSize:[30,30]
-            })
-        }).addTo(droneLayer);
-
-        marker.bindPopup("🚁 DRONE: " + d.id);
-
-        droneMarkers[d.id]=marker;
+    // 이름별 최신 데이터만 유지
+    data.forEach(item=>{
+        latest[item.name]=item;
     });
+
+    let droneFound=false;
+
+    Object.values(latest).forEach(p=>{
+
+        const pos=new kakao.maps.LatLng(p.lat,p.lng);
+
+        // =====================================
+        // DJI DRONE
+        // =====================================
+
+        if(p.device==="DRONE"){
+
+            droneFound=true;
+
+            if(!droneMarkers[p.name]){
+
+                droneMarkers[p.name]=new kakao.maps.Marker({
+
+                    map:map,
+
+                    position:pos,
+
+                    image:new kakao.maps.MarkerImage(
+
+                        "drone.png",
+
+                        new kakao.maps.Size(40,40)
+
+                    )
+
+                });
+
+                // 드론 이름 표시
+                const info=new kakao.maps.InfoWindow({
+
+                    content:
+                    `<div style="padding:5px;font-size:12px;">
+                        🚁 ${p.name}
+                    </div>`
+
+                });
+
+                info.open(map,droneMarkers[p.name]);
+
+            }else{
+
+                droneMarkers[p.name].setPosition(pos);
+
+            }
+
+            return;
+
+        }
+
+        // =====================================
+        // RESCUE MEMBER
+        // =====================================
+
+        if(!markers[p.name]){
+
+            markers[p.name]=new kakao.maps.Marker({
+
+                map:map,
+
+                position:pos
+
+            });
+
+        }else{
+
+            markers[p.name].setPosition(pos);
+
+        }
+
+    });
+
+    // 드론 상태 표시
+    if(droneFound){
+
+        setDroneStatus("ONLINE","#00ff00");
+
+    }else{
+
+        setDroneStatus("OFFLINE","#ff4444");
+
+    }
+
 }
+// ======================================================
+// STOP
+// ======================================================
 
-// ================= SOS =================
-function sendSOS(){
+function stopTracking(){
 
-    if(!lastPos) return;
+    if(watchId){
 
-    lastPos.status="SOS";
+        navigator.geolocation.clearWatch(watchId);
+
+    }
+
+    clearInterval(intervalSend);
+    clearInterval(intervalLoad);
+
+    watchId = null;
+    intervalSend = null;
+    intervalLoad = null;
+
+    lastPos = null;
+    myName = "";
+
+    nameInput.disabled = false;
+    nameInput.value = "";
+    startBtn.disabled = true;
+
+    alert("추적 종료");
+
+}  
+
+  
+  // ======================================================
+// RENDER LIVE (RESCUE + DJI DRONE)
+// ======================================================
+
+function renderLive(data){
+
+    const latest = {};
+
+    // 이름별 최신 데이터만 유지
+    data.forEach(item=>{
+        latest[item.name]=item;
+    });
+
+    let droneFound=false;
+
+    Object.values(latest).forEach(p=>{
+
+        const pos=new kakao.maps.LatLng(p.lat,p.lng);
+
+        // =====================================
+        // DJI DRONE
+        // =====================================
+
+        if(p.device==="DRONE"){
+
+            droneFound=true;
+
+            if(!droneMarkers[p.name]){
+
+                droneMarkers[p.name]=new kakao.maps.Marker({
+
+                    map:map,
+
+                    position:pos,
+
+                    image:new kakao.maps.MarkerImage(
+
+                        "drone.png",
+
+                        new kakao.maps.Size(40,40)
+
+                    )
+
+                });
+
+                // 드론 이름 표시
+                const info=new kakao.maps.InfoWindow({
+
+                    content:
+                    `<div style="padding:5px;font-size:12px;">
+                        🚁 ${p.name}
+                    </div>`
+
+                });
+
+                info.open(map,droneMarkers[p.name]);
+
+            }else{
+
+                droneMarkers[p.name].setPosition(pos);
+
+            }
+
+            return;
+
+        }
+
+        // =====================================
+        // RESCUE MEMBER
+        // =====================================
+
+        if(!markers[p.name]){
+
+            markers[p.name]=new kakao.maps.Marker({
+
+                map:map,
+
+                position:pos
+
+            });
+
+        }else{
+
+            markers[p.name].setPosition(pos);
+
+        }
+
+    });
+
+    // 드론 상태 표시
+    if(droneFound){
+
+        setDroneStatus("ONLINE","#00ff00");
+
+    }else{
+
+        setDroneStatus("OFFLINE","#ff4444");
+
+    }
+
+}
+  
+// ======================================================
+// LOCATION SHARE
+// ======================================================
+
+function shareLocation(){
+
+    if(!lastPos){
+
+        alert("현재 위치 없음");
+        return;
+
+    }
+
+
+    const text =
+`📡 위치 공유
+
+UNIT : ${lastPos.name}
+
+LAT : ${lastPos.lat}
+
+LNG : ${lastPos.lng}
+
+https://map.kakao.com/link/map/${lastPos.lat},${lastPos.lng}
+`;
+
+
+    // 서버에 공유 상태 저장
 
     fetch(API_URL,{
+
         method:"POST",
-        headers:{ "Content-Type":"text/plain" },
-        body:JSON.stringify(lastPos)
+
+        headers:{
+            "Content-Type":"text/plain"
+        },
+
+        body:JSON.stringify({
+
+            ...lastPos,
+
+            status:"SHARE"
+
+        })
+
     });
 
-    alert("🚨 SOS SENT");
+
+
+    // 모바일 공유
+
+    if(navigator.share){
+
+        navigator.share({
+
+            title:"구조 위치 공유",
+
+            text:text
+
+        });
+
+    }else{
+
+        prompt(
+            "복사하세요",
+            text
+        );
+
+    }
+
 }
 
-// ================= LOCATION =================
-function goMyLocation(){
-    if(!lastPos) return;
-    map.setView([lastPos.lat,lastPos.lng],16);
-}
 
-// ================= STOP =================
-function stopTracking(){
-    if(watchId) navigator.geolocation.clearWatch(watchId);
-    clearInterval(intervalSend);
-    clearInterval(intervalLive);
-    clearInterval(intervalDrone);
-}
 
-// ================= HISTORY =================
+// ======================================================
+// HISTORY LOAD
+// ======================================================
+
 function loadAllHistory(){
 
-    fetch(API_URL + "?history=all&t=" + Date.now())
-    .then(r=>r.json())
-    .then(showHistoryMap);
+    fetch(
+        API_URL+
+        "?history=all&t="+Date.now()
+    )
+
+    .then(res=>res.json())
+
+    .then(showHistory)
+
+    .catch(console.error);
+
 }
 
-function showHistoryMap(data){
 
-    historyMarkers.clearLayers();
-    historyLines.clearLayers();
+
+// ======================================================
+// HISTORY DISPLAY
+// ======================================================
+
+function showHistory(data){
+
 
     const grouped={};
 
+
     data.forEach(d=>{
-        if(!grouped[d.name]) grouped[d.name]=[];
-        grouped[d.name].push([d.lat,d.lng]);
+
+
+        if(!grouped[d.name]){
+
+            grouped[d.name]=[];
+
+        }
+
+
+        grouped[d.name].push(
+
+            new kakao.maps.LatLng(
+
+                d.lat,
+
+                d.lng
+
+            )
+
+        );
+
+
     });
+
+
 
     for(const name in grouped){
 
+
         const path=grouped[name];
 
-        L.marker(path[0])
-        .bindPopup("🚩 START: "+name)
-        .addTo(historyMarkers);
 
-        L.marker(path[path.length-1])
-        .bindPopup("🏁 END: "+name)
-        .addTo(historyMarkers);
+        // 이동 경로
 
-        L.polyline(path,{
-            color:"#ffcc00",
-            weight:3
-        }).addTo(historyLines);
+        new kakao.maps.Polyline({
+
+            map:map,
+
+            path:path,
+
+            strokeWeight:4,
+
+            strokeColor:"#ffcc00",
+
+            strokeOpacity:0.8
+
+        });
+
+
+
+        // 출발점
+
+        new kakao.maps.Marker({
+
+            map:map,
+
+            position:path[0]
+
+        });
+
+
+
+        // 마지막 위치
+
+        new kakao.maps.Marker({
+
+            map:map,
+
+            position:path[path.length-1]
+
+        });
+
+
     }
+
+
 }
 
+
+
+// ======================================================
+// DRONE AUTO CENTER
+// ======================================================
+
+function moveToDrone(name){
+
+
+    if(droneMarkers[name]){
+
+
+        const pos =
+        droneMarkers[name].getPosition();
+
+
+        map.setCenter(pos);
+
+
+    }
+
+}
+
+
+
+// ======================================================
+// WINDOW RESIZE
+// ======================================================
+
+window.addEventListener(
+
+"resize",
+
+()=>{
+
+    map.relayout();
+
+}
+
+);  
 </script>
+
 </body>
 </html>
