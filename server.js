@@ -3,7 +3,7 @@ const axios = require("axios");
 
 
 const API_URL =
-"https://script.google.com/macros/s/본인API/exec";
+"https://script.google.com/macros/s/AKfycbyem5fAs2XGxNy6wrHO3s68CmJyHy7GI31IBKdiz49KtN3sfikYdfmpP07-3dWqna2R/exec";
 
 
 // DJI MQTT 접속
